@@ -2,8 +2,8 @@
 
 > Systematic walk-forward backtesting of machine learning portfolio strategies
 > on a 48-asset Bloomberg universe. Balanced 40/30/30 allocation across
-> equity, ETF and bond buckets, with SHAP explainability and multi-benchmark
-> comparison (SPY, VWCE, 60/40, 70/30).
+> equity, ETF and bond buckets, with multi-benchmark comparison
+> (SPY, VWCE, 60/40, 70/30).
 
 ## Features
 
@@ -19,7 +19,6 @@
   per-asset cap and water-filling allocator
 - **Realistic transaction costs**: differentiated per-asset (5–200 bps/side)
   based on liquidity tier
-- **SHAP-based explainability** for each model
 - **Multi-benchmark comparison** vs SPY, VWCE, 60/40 and 70/30 portfolios
 - **Parallel execution** across assets via `joblib`
 
@@ -58,7 +57,7 @@ The pipeline runs end-to-end:
 2. Computes 50 features for each asset
 3. Runs walk-forward backtesting for each configured model
 4. Generates per-model reports (equity curve, drawdown, monthly heatmap,
-   feature importance, allocation, SHAP analysis)
+   feature importance, allocation)
 5. Produces cross-model comparison reports and a multi-benchmark table
 
 ## Output
@@ -72,11 +71,7 @@ results/
 │   ├── rolling_sharpe.png
 │   ├── monthly_returns.png
 │   ├── feature_importance.png
-│   ├── allocation.png
-│   └── shap/
-│       ├── shap_importance.png
-│       ├── shap_beeswarm.png
-│       └── shap_dep_*.png
+│   └── allocation.png
 ├── random_forest/  (same structure)
 ├── ensemble/       (same structure)
 ├── comparison_equity.png
