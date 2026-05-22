@@ -1,11 +1,16 @@
 
 """
 ══════════════════════════════════════════════════════════════════════════════
-  ML PORTFOLIO MANAGEMENT SYSTEM - V2 (Ottimizzato e Corretto)
-  Strategia sistematica con walk-forward validation & Multiprocessing
-  Modelli: XGBoost / Random Forest / Ensemble
+  ML PORTFOLIO MANAGEMENT SYSTEM — V2
+  Systematic strategy with walk-forward validation & multiprocessing.
+  Models: XGBoost / Random Forest / Ensemble.
 ══════════════════════════════════════════════════════════════════════════════
 """
+
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  SECTION 1 — IMPORTS & ENVIRONMENT SETUP                                  ║
+# ║  Standard library, third-party imports, Colab auto-detection.             ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
 
 import sys, os
 import time
@@ -33,7 +38,7 @@ if IN_COLAB:
     drive.mount("/content/drive", force_remount=False)
     COLAB_DIR = "/content/drive/MyDrive/ML"
     if not os.path.exists(COLAB_DIR):
-        print(f"  ATTENZIONE: cartella '{COLAB_DIR}' non trovata su Drive.")
+        print(f"  WARNING: folder '{COLAB_DIR}' not found on Drive.")
         sys.exit(1)
     os.chdir(COLAB_DIR)
 
@@ -41,7 +46,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║  CONFIGURAZIONE                                                         ║
+# ║  SECTION 2 — CONFIGURATION                                                ║
+# ║  Central Config dataclass holding all strategy parameters: universe,      ║
+# ║  buckets, features, model hyperparameters and transaction costs.          ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
 @dataclass
@@ -132,7 +139,9 @@ class Config:
     output_dir: str = "results"
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║  DATA LOADING & CLEANING                                                ║
+# ║  SECTION 3 — DATA LOADING & CLEANING                                      ║
+# ║  Reads the Bloomberg Excel file, parses dates, drops NaT rows,            ║
+# ║  removes duplicate days, forward/backward fills weekends and holidays.    ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
 def load_data(cfg: Config) -> pd.DataFrame:
@@ -147,8 +156,13 @@ def load_data(cfg: Config) -> pd.DataFrame:
     return df
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║  FEATURE ENGINEERING                                                     ║
+# ║  SECTION 4 — FEATURE ENGINEERING                                          ║
+# ║  Builds ~50 predictive features per asset: technical (RSI, MACD,          ║
+# ║  Bollinger, momentum), macro (VIX, DXY, yields) and cross-asset           ║
+# ║  (breadth, dispersion). Also constructs the supervised target.            ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
+
+# ── 4.1 Technical indicators (per asset) ──────────────────────────────────────
 
 def _rsi(prices: pd.Series, period: int) -> pd.Series:
     delta = prices.diff()
@@ -179,6 +193,8 @@ def compute_asset_features(prices: pd.Series, cfg: Config) -> pd.DataFrame:
     f["dist_low_252"] = prices / prices.rolling(252).min() - 1
     return f.replace([np.inf, -np.inf], np.nan)
 
+# ── 4.2 Macro features (global regime: VIX, DXY, rates, breakeven) ────────────
+
 def compute_macro_features(data: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     f = pd.DataFrame(index=data.index)
     for col in cfg.macro_indicators:
@@ -191,6 +207,8 @@ def compute_macro_features(data: pd.DataFrame, cfg: Config) -> pd.DataFrame:
         f["vix_above20"] = (data[".VIX"] > 20).astype(float)
     return f.replace([np.inf, -np.inf], np.nan)
 
+# ── 4.3 Cross-asset features (breadth, return dispersion) ─────────────────────
+
 def compute_cross_features(data: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     cols = [c for c in cfg.tradeable_assets if c in data.columns]
     rets = data[cols].pct_change()
@@ -198,6 +216,8 @@ def compute_cross_features(data: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     f["breadth_20d"] = (rets.rolling(20).sum() > 0).mean(axis=1)
     f["ret_dispersion"] = rets.std(axis=1)
     return f.replace([np.inf, -np.inf], np.nan)
+
+# ── 4.4 Target construction (Buy / Hold / Sell with vol-scaled thresholds) ────
 
 def compute_target(prices: pd.Series, cfg: Config) -> pd.Series:
     fwd = prices.shift(-cfg.forward_period) / prices - 1
@@ -212,8 +232,12 @@ def compute_target(prices: pd.Series, cfg: Config) -> pd.Series:
     return target
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║  ML ENGINE — Walk-Forward                                               ║
+# ║  SECTION 5 — ML ENGINE: MODELS & WALK-FORWARD VALIDATION                  ║
+# ║  Model factories (XGBoost, Random Forest, Ensemble) and the               ║
+# ║  expanding-window walk-forward loop that prevents lookahead bias.         ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
+
+# ── 5.1 Model factories and prediction helpers ────────────────────────────────
 
 def _make_xgb(cfg: Config):
     return XGBClassifier(n_estimators=cfg.n_estimators, max_depth=cfg.max_depth,
@@ -253,6 +277,8 @@ def _importance_from_model(model, model_type):
         return (xgb.feature_importances_ + rf.feature_importances_) / 2
     return model.feature_importances_
 
+# ── 5.2 Walk-forward expanding-window training & prediction ───────────────────
+
 def walk_forward_asset(X: pd.DataFrame, y: pd.Series, cfg: Config) -> tuple[pd.Series, list[pd.Series]]:
     n = len(X)
     signal = pd.Series(np.nan, index=X.index)
@@ -276,8 +302,12 @@ def walk_forward_asset(X: pd.DataFrame, y: pd.Series, cfg: Config) -> tuple[pd.S
     return signal.ffill(), importances
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║  BACKTESTER & VOLATILITY TARGETING                                        ║
+# ║  SECTION 6 — PORTFOLIO CONSTRUCTION & BACKTESTING                         ║
+# ║  Vol-targeted, bucket-balanced allocation with water-filling cap,         ║
+# ║  shift-by-one weights to avoid lookahead, and per-asset costs.            ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
+
+# ── 6.1 Bucket weight allocator (water-filling with per-asset cap) ────────────
 
 def _bucket_weights(bullish: pd.Series, vols: pd.Series, bucket_assets: list, target_pct: float, cap: float) -> pd.Series:
     bs = bullish[[a for a in bucket_assets if a in bullish.index]]
@@ -300,6 +330,8 @@ def _bucket_weights(bullish: pd.Series, vols: pd.Series, bucket_assets: list, ta
         remaining_pct -= room.loc[capped_idx].sum()
         remaining_scores = remaining_scores.drop(capped_idx)
     return w
+
+# ── 6.2 Backtest engine (daily returns net of differentiated costs) ───────────
 
 def run_backtest(signals: pd.DataFrame, prices: pd.DataFrame, cfg: Config) -> dict:
     common = signals.index.intersection(prices.index)
@@ -332,8 +364,12 @@ def run_backtest(signals: pd.DataFrame, prices: pd.DataFrame, cfg: Config) -> di
     return {"returns": port_ret_net, "weights": weights, "cumulative": cumulative, "turnover": turnover}
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║  METRICHE & REPORTING                                                   ║
+# ║  SECTION 7 — PERFORMANCE METRICS & REPORTING                              ║
+# ║  Sharpe, Sortino, Calmar, drawdown; benchmark builders (tickers and       ║
+# ║  blended portfolios); console summary and matplotlib charts.              ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
+
+# ── 7.1 Performance metrics (Sharpe, Sortino, Calmar, Max DD, Win Rate) ───────
 
 def _calc_metrics(r: pd.Series) -> dict:
     if len(r) >= 2: n_years = (r.index[-1] - r.index[0]).days / 365.25
@@ -351,6 +387,8 @@ def _calc_metrics(r: pd.Series) -> dict:
     win_rate = (r > 0).mean()
     return {"total_return": total, "cagr": cagr, "volatility": vol, "sharpe": sharpe, 
             "sortino": sortino, "max_drawdown": max_dd, "calmar": calmar, "win_rate": win_rate}
+
+# ── 7.2 Benchmark builders (single ticker or constant-weight blend) ───────────
 
 def compute_benchmark_returns(definition: tuple, data: pd.DataFrame) -> pd.Series:
     kind, payload = definition
@@ -378,6 +416,8 @@ def compute_metrics(port_ret: pd.Series, bench_ret: pd.Series) -> dict:
     for k, v in _calc_metrics(br).items(): m[f"benchmark_{k}"] = v
     return m
 
+# ── 7.3 Console summary output ────────────────────────────────────────────────
+
 def print_metrics(metrics: dict):
     print("\n" + "=" * 60)
     print("  PERFORMANCE SUMMARY")
@@ -392,6 +432,8 @@ def print_metrics(metrics: dict):
         sv, bv = f.format(metrics.get(f"strategy_{key}", 0)), f.format(metrics.get(f"benchmark_{key}", 0))
         print(fmt.format(label, sv, bv))
     print("=" * 60)
+
+# ── 7.4 Per-model plots (equity curve, feature importance) ────────────────────
 
 def generate_report(results, bench_ret, importances, metrics, cfg, benchmark_rets=None):
     os.makedirs(cfg.output_dir, exist_ok=True)
@@ -424,6 +466,8 @@ def generate_report(results, bench_ret, importances, metrics, cfg, benchmark_ret
         fig.savefig(os.path.join(cfg.output_dir, "feature_importance.png"), dpi=150)
         plt.close(fig)
 
+# ── 7.5 Cross-model comparison plot ───────────────────────────────────────────
+
 def _comparison_report(runs, bench_ret, base_cfg, benchmark_rets=None):
     os.makedirs(base_cfg.output_dir, exist_ok=True)
     sns.set_theme(style="whitegrid")
@@ -443,14 +487,20 @@ def _comparison_report(runs, bench_ret, base_cfg, benchmark_rets=None):
     plt.close(fig)
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║  MULTIPROCESSING HELPER & MAIN ENGINE                                    ║
+# ║  SECTION 8 — PARALLEL EXECUTION & MAIN PIPELINE                           ║
+# ║  Per-asset worker for joblib parallelization, per-model orchestrator      ║
+# ║  and the top-level main() that ties the whole pipeline together.          ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
+
+# ── 8.1 Per-asset worker (used by joblib Parallel) ────────────────────────────
 
 def process_asset(asset, data_asset, cfg, asset_feat, macro, cross):
     X = pd.concat([asset_feat, macro, cross], axis=1)
     y = compute_target(data_asset, cfg)
     signal, imps = walk_forward_asset(X, y, cfg)
     return asset, signal, imps
+
+# ── 8.2 Per-model orchestrator (walk-forward + backtest + report) ─────────────
 
 def _run_single_model(model_type, data, available, asset_feat_dict, macro, cross, bench_ret, base_cfg, benchmark_rets=None):
     cfg = copy(base_cfg)
@@ -467,6 +517,8 @@ def _run_single_model(model_type, data, available, asset_feat_dict, macro, cross
     print_metrics(metrics)
     generate_report(results_bt, bench_ret, all_importances, metrics, cfg, benchmark_rets=benchmark_rets)
     return {"model_type": model_type, "results": results_bt, "metrics": metrics, "elapsed": time.time() - t_model}
+
+# ── 8.3 Main pipeline entry point ─────────────────────────────────────────────
 
 def main():
     cfg = Config()
@@ -485,4 +537,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-"""
+
